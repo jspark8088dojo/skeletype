@@ -4,7 +4,7 @@
 //
 // How: every ES module (three.js and the app) becomes a data: URL listed in the page's import map, with
 // relative imports rewritten to bare names the import map resolves. The stylesheet is inlined and the
-// mesh pack is embedded as base64 (viewer.js reads it from #foot-pack).
+// mesh packs are embedded as base64 (viewer.js reads them from #pack-<region>).
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,14 +32,15 @@ for (const file of readdirSync(join(root, 'src')).filter((f) => f.endsWith('.js'
 }
 
 const css = read('src/styles.css');
-const pack = readFileSync(join(root, 'assets', 'foot.pack')).toString('base64');
+const packs = readdirSync(join(root, 'assets')).filter((f) => f.endsWith('.pack'))
+  .map((f) => `<script type="application/octet-stream" id="pack-${f.slice(0, -5)}">${readFileSync(join(root, 'assets', f)).toString('base64')}</script>`).join('\n');
 let html = read('index.html');
 
 const swaps = [
   [/<link rel="stylesheet" href="src\/styles\.css">/, `<style>\n${css}\n</style>`],
   [/<script type="importmap">[\s\S]*?<\/script>/, `<script type="importmap">${JSON.stringify({ imports })}</script>`],
   [/<script type="module" src="src\/main\.js"><\/script>/, `<script type="module">import 'skeletype/main.js';</script>`],
-  [/<\/body>/, `<script type="application/octet-stream" id="foot-pack">${pack}</script>\n</body>`],
+  [/<\/body>/, `${packs}\n</body>`],
 ];
 for (const [re, rep] of swaps) {
   if (!re.test(html)) throw new Error(`build: pattern not found: ${re}`);

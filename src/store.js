@@ -7,7 +7,7 @@ let memory = null;
 function defaults() {
   return {
     v: 1,
-    settings: { lang: 'en', sound: true, font: 'sans' },
+    settings: { lang: 'en', sound: true, face: 'serif', region: 'foot' },
     firstVisit: null,
     levels: {},
     daily: {},

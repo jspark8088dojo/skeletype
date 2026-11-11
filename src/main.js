@@ -1,6 +1,6 @@
-// Boot: load the meshes, start the 3D viewer (or a stand-in without WebGL), then the app.
+// Boot: start the 3D viewer (or a stand-in without WebGL), then the app, which loads each region's models on demand.
 
-import { loadPack, Viewer, NullViewer } from './viewer.js';
+import { Viewer, NullViewer } from './viewer.js';
 import { App } from './app.js';
 
 const boot = document.getElementById('boot');
@@ -10,8 +10,7 @@ async function main() {
   let viewer;
   let webgl = true;
   try {
-    const pack = await loadPack('assets/foot.pack');
-    viewer = new Viewer(document.getElementById('gl'), pack);
+    viewer = new Viewer(document.getElementById('gl'));
   } catch (err) {
     console.error(err);
     viewer = new NullViewer();
@@ -19,10 +18,10 @@ async function main() {
   }
   const app = new App({ viewer, webgl });
   window.skeletype = app;
+  await app.start();
   boot.classList.add('gone');
   setTimeout(() => boot.remove(), 500);
-  app.start();
-  if (!webgl) app.toast('3D is unavailable in this browser, so the bones are hidden. Typing still works.', 7000);
+  if (!webgl) app.toast('3D is unavailable in this browser, so the models are hidden. Typing still works.', 7000);
 }
 
 main().catch((err) => {

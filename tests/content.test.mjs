@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ITEMS, LEVELS, MESH_INFO, allItems } from '../src/content.js';
+import { ITEMS, LEVELS, REGIONS, MESH_INFO, allItems } from '../src/content.js';
 import { normalize, answersFor } from '../src/match.js';
 
-const MESHES = ['tibia', 'fibula', 'talus', 'calcaneus', 'navicular', 'cuboid', 'cun_med', 'cun_int', 'cun_lat',
-  'mt1', 'mt2', 'mt3', 'mt4', 'mt5', 'pp1', 'pp2', 'pp3', 'pp4', 'pp5', 'mp2', 'mp3', 'mp4', 'mp5', 'dp1', 'dp2', 'dp3', 'dp4', 'dp5'];
+const MESHES = Object.keys(MESH_INFO);
 // Words that appear in answers but give nothing away on their own.
 const GENERIC = new Set(['the', 'of', 'bone', 'bones', 'os', 'de', 'du', 'des', 'la', 'le', 'l', 'phalanx', 'phalanges', 'phalange',
   'foot', 'toe', 'toes', 'pied', 'orteil', 'orteils', 'pedis']);
@@ -64,10 +63,17 @@ test('levels reference real items and carry their notes', () => {
       for (const n of lv.examAngle) assert.ok(n.term && n.text && n.text.length <= 230, `${lv.id} note ${n.term}`);
     }
   }
-  assert.deepEqual(LEVELS.find((l) => l.speed).items.sort(), Object.keys(ITEMS).sort());
+  for (const r of REGIONS) {
+    const taught = r.levels.filter((l) => !l.speed).flatMap((l) => l.items);
+    assert.deepEqual([...r.levels.find((l) => l.speed).items].sort(), [...taught].sort(), `${r.id} speed run covers its levels`);
+    for (const g of r.mapGroups) for (const k of g.keys) assert.ok(MESH_INFO[k], `${r.id} map: unknown mesh ${k}`);
+  }
+  assert.equal(new Set(LEVELS.map((l) => l.id)).size, LEVELS.length, 'level ids are unique');
+  assert.deepEqual(REGIONS.flatMap((r) => r.levels.filter((l) => !l.speed).flatMap((l) => l.items)).sort(), Object.keys(ITEMS).sort());
 });
 
 test('every mesh has a body-map label in both languages', () => {
+  assert.equal(MESHES.length, 80);
   for (const m of MESHES) {
     assert.ok(MESH_INFO[m], `missing label for ${m}`);
     assert.ok(MESH_INFO[m].en && MESH_INFO[m].fr && MESH_INFO[m].describe, `incomplete label for ${m}`);

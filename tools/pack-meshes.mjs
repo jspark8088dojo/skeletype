@@ -132,6 +132,7 @@ const header = {
   frame: 'right foot; +X medial, +Y up, +Z anterior; sole at y=0',
   source: 'BodyParts3D (c) 2008 Life Science Integrated Database Center, CC BY-SA 2.1 JP',
   legCutCm: LEG_CUT_CM,
+  region: 'foot', center: [0, 3, 0], radius: 12.6, floorY: 0, context: ['tibia', 'fibula'], fade: [12, 22],
   bones,
 };
 let hjson = JSON.stringify(header);

@@ -1,12 +1,12 @@
-// App controller: screens, the typing flow, results, reviews, bone of the day and the body map.
+// App controller: screens, the typing flow, results, reviews, the daily structure and the body map.
 
 import { Session } from './engine.js';
 import { addDays, dayKey, dayStart, describeDue, firstInterval, isDue, nextInterval, DAY_MS } from './srs.js';
-import { LEVELS, ITEMS, MESH_INFO, BODY_MAP_GROUPS, levelById, allItems, altName, levelOfMesh } from './content.js';
+import { REGIONS, LEVELS, ITEMS, MESH_INFO, regionById, regionOfLevel, regionOfItem, itemsOfRegion, levelById, allItems, altName, levelOfMesh } from './content.js';
 import { loadState, saveState, levelState, STORAGE_KEY } from './store.js';
 import { Keyboard } from './keyboard.js';
 import { Sound } from './audio.js';
-import { POSE_LABEL } from './viewer.js';
+import { POSE_LABEL, loadPack } from './viewer.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -24,14 +24,10 @@ const hashString = (s) => {
 const ROUND_NAME = { 1: 'copy', 2: 'first letter', 3: 'from memory' };
 const ROUND_INTRO = {
   2: { title: 'Round 2 · first letter', text: 'Just the first letter and the blanks now. Type the whole name.' },
-  3: { title: 'Round 3 · from memory', text: 'No letters, no clues. Name each glowing bone from any angle.' },
+  3: { title: 'Round 3 · from memory', text: 'No letters, no clues. Name each one from any angle.' },
 };
-const INSET_POSE = { 1: 'lateral', 2: 'dorsal', 3: 'lateral' };
-const STAR_TEXT = {
-  lesson: ['Finish the level', 'Get through round 3 without a miss', 'Recall them on another day'],
-  speed: ['Finish the run', 'No misses', 'Under 1:30'],
-};
-const FONTS = ['sans', 'serif', 'mono'];
+const FACES = ['serif', 'sans', 'mono'];
+const INSET_TINT = [0xebe4d5, 1];
 
 export class App {
   constructor({ viewer, webgl = true }) {
@@ -44,6 +40,8 @@ export class App {
     this.session = null;
     this.run = null;
     this.timers = {};
+    this.packs = new Map();
+    this.nav = 0;
     this.mapSelected = null;
     this.applySettings();
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
@@ -81,20 +79,24 @@ export class App {
     window.addEventListener('focus', () => this.focusSink());
   }
 
+  get region() {
+    return regionById(this.state.settings.region);
+  }
+
   focusSink() {
     if (this.screen !== 'lesson') return;
     const sink = $('#sink');
     if (document.activeElement !== sink) sink.focus({ preventScroll: true });
   }
 
-  start() {
+  async start() {
     if (!this.state.firstVisit) {
       this.state.firstVisit = Date.now();
       this.save();
-      this.startLevel('L1', 'lesson');
-      this.toast('Type the name of the glowing bone. Esc opens the menu.', 6500);
+      await this.startLevel('L1', 'lesson');
+      this.toast('Type the name of the bone shown in red. Esc opens the index.', 6500);
     } else {
-      this.showHome();
+      await this.showHome();
     }
   }
 
@@ -103,41 +105,69 @@ export class App {
     if (!this.storageOk) this.toastOnce('storage', 'Progress can’t be saved in this browser window.');
   }
 
+  /** Make sure the viewer holds this region's models (fetched once, then cached). */
+  async ensureRegion(id) {
+    if (this.viewer.packId === id) return true;
+    if (!this.webgl) { this.viewer.setPack({ header: { region: id } }); return true; }
+    if (!this.packs.has(id)) this.packs.set(id, loadPack(id));
+    try {
+      const pack = await this.packs.get(id);
+      this.viewer.setPack(pack, regionById(id).ink);
+      return true;
+    } catch (err) {
+      console.error(err);
+      this.packs.delete(id);
+      this.toast('The 3D models didn’t load. Check your connection and try again.', 6000);
+      return false;
+    }
+  }
+
+  setRegion(id) {
+    if (this.state.settings.region === id) return;
+    this.state.settings.region = id;
+    this.save();
+    this.applySettings();
+  }
+
   // ---------------------------------------------------------------- settings
 
   applySettings() {
-    const { font, lang, sound } = this.state.settings;
-    document.documentElement.dataset.font = font;
+    const { face, lang, sound } = this.state.settings;
+    document.documentElement.dataset.face = face;
     const tf = $('#t-font'), tl = $('#t-lang'), ts = $('#t-sound');
-    tf.title = `Typeface: ${font}`;
-    tl.textContent = lang.toUpperCase();
+    tf.title = `Typeface: ${face}`;
+    tl.textContent = lang === 'en' ? 'English' : 'Français';
     tl.title = lang === 'en' ? 'Answers in English (switch to French)' : 'Réponses en français (switch to English)';
-    ts.textContent = sound ? 'sound on' : 'sound off';
+    ts.textContent = sound ? 'Sound on' : 'Sound off';
     ts.setAttribute('aria-pressed', String(sound));
     this.sound.enabled = sound;
+    const r = this.region;
+    $('#crumb').textContent = `Plate ${r.plate} · ${r.title}`;
   }
 
   action(name, data) {
     const S = this.state.settings;
     switch (name) {
       case 'home': this.showHome(); break;
-      case 'font': S.font = FONTS[(FONTS.indexOf(S.font) + 1) % FONTS.length]; this.applySettings(); this.save(); if (this.screen === 'lesson') this.fitWord(); break;
+      case 'font': S.face = FACES[(FACES.indexOf(S.face) + 1) % FACES.length]; this.applySettings(); this.save(); if (this.screen === 'lesson') this.fitWord(); break;
       case 'lang': {
         S.lang = S.lang === 'en' ? 'fr' : 'en';
         this.applySettings();
         this.save();
         if (this.session && this.screen === 'lesson') this.relang();
+        else if (this.screen === 'map') this.showMap();
         this.toast(S.lang === 'fr' ? 'Answers in French now. Accents are optional.' : 'Answers in English now.');
         break;
       }
       case 'sound': S.sound = !S.sound; this.applySettings(); this.save(); if (S.sound) this.sound.key(); break;
+      case 'region': this.setRegion(data.region); if (this.screen === 'map') this.showMap(); else this.showHome(); break;
       case 'level': this.openLevel(data.level); break;
       case 'play': this.startLevel(data.level, data.mode || 'lesson'); break;
       case 'continue': this.press('Enter'); break;
       case 'primary': this.primaryAction(); break;
       case 'daily': this.startDaily(); break;
       case 'map': this.showMap(); break;
-      case 'map-pose': this.viewer.setPose('map', data.pose, { duration: 900, focus: this.mapSelected ? [this.mapSelected] : null, focusAmount: 0.2 }); break;
+      case 'map-pose': this.viewer.setPose('map', data.pose, { duration: 900 }); break;
       case 'map-bone': this.selectMapBone(data.key); break;
       default: break;
     }
@@ -177,11 +207,14 @@ export class App {
   /** What Enter does on the home and results screens. */
   primaryTarget() {
     const now = Date.now();
-    const due = LEVELS.find((lv) => !lv.speed && isDue(this.state.levels[lv.id]?.nextReviewAt, now));
+    const region = this.region;
+    const isDueLevel = (lv) => !lv.speed && isDue(this.state.levels[lv.id]?.nextReviewAt, now);
+    const due = region.levels.find(isDueLevel) || LEVELS.find(isDueLevel);
     if (due) return { label: `Review · ${due.title}`, level: due.id, mode: 'review' };
-    const fresh = LEVELS.find((lv) => !this.state.levels[lv.id]?.stars?.[0]);
-    if (fresh) return { label: `${fresh.n === 1 ? 'Start' : 'Next'} · Level ${fresh.n} · ${fresh.title}`, level: fresh.id, mode: 'lesson' };
-    return { label: 'Speed run', level: 'SR', mode: 'speed' };
+    const fresh = region.levels.find((lv) => !this.state.levels[lv.id]?.stars?.[0]);
+    if (fresh) return { label: fresh.speed ? `Speed run · ${region.title}` : `${fresh.n === 1 ? 'Begin' : 'Continue'} · ${fresh.title}`, level: fresh.id, mode: fresh.speed ? 'speed' : 'lesson' };
+    const sr = region.levels.find((lv) => lv.speed);
+    return { label: `Speed run · ${region.title}`, level: sr.id, mode: 'speed' };
   }
 
   primaryAction() {
@@ -189,7 +222,7 @@ export class App {
     this.startLevel(t.level, t.mode);
   }
 
-  /** Clicking a level card: a due review if there is one, otherwise the full lesson. */
+  /** Clicking a level: a due review if there is one, otherwise the full lesson. */
   openLevel(id) {
     const lv = levelById(id);
     const L = this.state.levels[id];
@@ -199,38 +232,46 @@ export class App {
 
   // ---------------------------------------------------------------- lesson
 
-  startLevel(id, mode = 'lesson') {
+  async startLevel(id, mode = 'lesson') {
     const level = levelById(id);
     if (!level) return;
     if (level.speed) mode = 'speed';
+    const region = regionOfLevel(id);
+    const nav = ++this.nav;
+    this.endSession();
+    this.setRegion(region.id);
+    if (!(await this.ensureRegion(region.id)) || nav !== this.nav) return;
     const items = level.items.map((k) => ITEMS[k]);
     const rounds = mode === 'practice' ? [2, 3] : mode === 'review' || mode === 'speed' ? [3] : [1, 2, 3];
-    this.endSession();
     this.session = new Session({
       items, rounds, mode,
       lang: this.state.settings.lang,
-      pool: allItems(),
+      pool: itemsOfRegion(region.id),
       seed: hashString(`${id}:${Date.now()}`),
       maxAttempts: mode === 'speed' ? 2 : 3,
       gap: mode === 'speed' ? 3 : 2,
       now: () => performance.now(),
     }).start();
-    this.run = { level, mode };
+    this.run = { level, mode, region };
     this.enterLesson();
     if (mode === 'review') this.toast(`Review: ${level.title.toLowerCase()}, straight from memory.`);
     if (mode === 'practice') this.toast('Practice: rounds 2 and 3 only.');
     if (mode === 'speed') this.toast('Speed run: the clock starts on your first key.');
   }
 
-  startDaily() {
+  async startDaily() {
     const now = Date.now();
     const day = dayKey(now);
     const pool = allItems();
     const item = pool[hashString(`bone-of-the-day:${day}`) % pool.length];
+    const region = regionOfItem(item.key);
     const n = this.dailyNumber(now);
+    const nav = ++this.nav;
     this.endSession();
-    this.session = new Session({ items: [item], rounds: [3], mode: 'daily', lang: this.state.settings.lang, pool, maxAttempts: 1, now: () => performance.now() }).start();
-    this.run = { level: { id: 'daily', title: `Bone of the day #${n}` }, mode: 'daily', day, n };
+    this.setRegion(region.id);
+    if (!(await this.ensureRegion(region.id)) || nav !== this.nav) return;
+    this.session = new Session({ items: [item], rounds: [3], mode: 'daily', lang: this.state.settings.lang, pool: itemsOfRegion(region.id), maxAttempts: 1, now: () => performance.now() }).start();
+    this.run = { level: { id: 'daily', title: `Daily #${n}` }, mode: 'daily', day, n, region };
     this.enterLesson();
   }
 
@@ -240,9 +281,10 @@ export class App {
   }
 
   enterLesson() {
+    const P = this.run.region.poses;
     this.show('lesson');
-    this.viewer.setView('main', $('#stage-main'), { pose: 'dorsal' });
-    this.viewer.setView('inset', $('#inset-view'), { pose: 'lateral', tint: [0x141a29, 0.55] });
+    this.viewer.setView('main', $('#stage-main'), { pose: P.r1 });
+    this.viewer.setView('inset', $('#inset-view'), { pose: P.inset[1], tint: INSET_TINT });
     $('#screen-lesson').dataset.mode = this.run.mode;
     if (this.run.mode === 'speed') this.timers.clock = setInterval(() => this.renderMeta(), 250);
     this.onPrompt(true);
@@ -322,20 +364,29 @@ export class App {
 
   onPrompt(instant = false) {
     const s = this.session;
+    const region = this.run.region;
+    const P = region.poses;
     const item = s.item;
     const r = s.round;
     const cam = item.cam || {};
-    const pose = cam[`r${r}`] || (r === 3 ? 'plantar' : 'dorsal');
+    const pose = cam[`r${r}`] || P[`r${r}`];
     const dur = instant ? 0 : 950;
-    this.viewer.setPose('main', pose, { focus: item.meshes, focusAmount: cam.focus ?? (r === 1 ? 0.25 : 0.4), zoom: cam.zoom ?? 1, duration: dur });
-    let ipose = INSET_POSE[r];
-    if (ipose === pose) ipose = pose === 'lateral' ? 'medial' : 'lateral';
-    this.viewer.setPose('inset', ipose, { focus: item.meshes, focusAmount: 0.2, duration: dur });
-    $('#inset-label').textContent = `right foot · ${POSE_LABEL[ipose]}`;
+    // Small or deep structures: move in on them. The foot keeps its hand-tuned framing.
+    const auto = region.autoFrame ? this.viewer.framingFor(item.meshes) : null;
+    this.viewer.setPose('main', pose, {
+      focus: item.meshes,
+      focusAmount: cam.focus ?? auto?.focusAmount ?? (r === 1 ? 0.25 : 0.4),
+      zoom: cam.zoom ?? auto?.zoom ?? 1,
+      duration: dur,
+    });
+    let ipose = P.inset[r];
+    if (ipose === pose) ipose = P.insetAlt;
+    this.viewer.setPose('inset', ipose, { focus: item.meshes, focusAmount: 0.15, duration: dur });
+    $('#inset-label').textContent = `${region.figure}, ${POSE_LABEL[ipose]}`;
     this.viewer.setHighlight(item.meshes);
     this.kbd.clearHint();
     this.renderPrompt();
-    const hint = r === 1 ? `Type: ${item[s.lang]}` : r === 2 ? `Starts with ${item[s.lang][0]}. ${item.cue}` : 'Name the glowing bone.';
+    const hint = r === 1 ? `Type: ${item[s.lang]}` : r === 2 ? `Starts with ${item[s.lang][0]}. ${item.cue}` : `Name the ${region.noun} shown in red.`;
     this.announce(`${this.metaText()}. ${hint}`);
   }
 
@@ -344,13 +395,13 @@ export class App {
   metaText() {
     const s = this.session;
     if (!s) return '';
-    if (s.mode === 'daily') return `bone of the day #${this.run.n} · from memory`;
+    if (s.mode === 'daily') return `Daily #${this.run.n} · from memory`;
     if (s.mode === 'speed') {
       const elapsed = s.startedAt == null ? 0 : (s.endedAt ?? performance.now()) - s.startedAt;
-      return `speed run · ${s.index} / ${s.total} · ${fmtTime(elapsed)}`;
+      return `Speed run · ${s.index} of ${s.total} · ${fmtTime(elapsed)}`;
     }
-    const prefix = s.mode === 'review' ? 'review · ' : '';
-    return `${prefix}round ${s.round} · ${ROUND_NAME[s.round]} · ${s.index} / ${s.total}`;
+    const prefix = s.mode === 'review' ? 'Review · ' : '';
+    return `${prefix}Round ${s.round} · ${ROUND_NAME[s.round]} · ${s.index} of ${s.total}`;
   }
 
   renderMeta() {
@@ -369,10 +420,11 @@ export class App {
     this.renderMeta();
     this.renderWord();
     const item = s.item;
+    const noun = this.run.region.noun;
     let sub = '';
-    if (s.round === 1) sub = `<span class="alt">${esc(altName(item, s.lang))}</span> · ${esc(item.describe)}`;
+    if (s.round === 1) sub = `<span class="alt">${esc(altName(item, s.lang))}</span> — ${esc(item.describe)}`;
     else if (s.round === 2) sub = esc(item.cue);
-    else sub = `<span class="quiet">${item.meshes.length > 1 ? 'name the glowing group' : 'name the glowing bone'}${s.mode === 'daily' ? ' · one try' : ''}</span>`;
+    else sub = `<span class="quiet">${item.meshes.length > 1 && noun === 'bone' ? 'name the bones in red' : `name the ${noun} in red`}${s.mode === 'daily' ? ' · one try' : ''}</span>`;
     $('#p-sub').innerHTML = sub;
   }
 
@@ -416,15 +468,15 @@ export class App {
     const s = this.session;
     const el = $('#p-word');
     if (!s || !el) return;
-    const revealing = $('#prompt').dataset.state === 'reveal'; // misses and the bone-of-the-day card
+    const revealing = $('#prompt').dataset.state === 'reveal'; // misses and the daily card
     let len = s.answer.length;
     if (s.round === 3 && s.phase === 'prompt') len = Math.max(9, s.input.length + 2);
     if (revealing) len = Math.max(len, 9);
     // #prompt sits in a minmax(0, 1fr) column with min-width 0, so its width isn't inflated by the word.
     const w = Math.min($('#prompt').clientWidth || window.innerWidth, 1100);
     const H = window.innerHeight;
-    const cap = H < 520 ? (revealing ? 36 : 46) : revealing ? 62 : H < 760 ? 80 : 92;
-    const size = Math.max(26, Math.min(cap, (w * 0.9) / (Math.max(len, 6) * 0.6)));
+    const cap = H < 520 ? (revealing ? 36 : 46) : revealing ? 60 : H < 760 ? 78 : 90;
+    const size = Math.max(26, Math.min(cap, (w * 0.9) / (Math.max(len, 6) * 0.56)));
     el.style.fontSize = `${size.toFixed(1)}px`;
   }
 
@@ -438,9 +490,10 @@ export class App {
   renderIntro() {
     const s = this.session;
     const r = s.round;
+    const region = this.run.region;
     const info = ROUND_INTRO[r];
     $('#prompt').dataset.state = 'intro';
-    $('#p-meta').textContent = s.mode === 'lesson' ? `round ${r} of ${s.rounds.at(-1)}` : '';
+    $('#p-meta').textContent = s.mode === 'lesson' ? `Round ${r} of ${s.rounds.at(-1)}` : '';
     const el = $('#p-word');
     el.classList.remove('win');
     el.innerHTML = `<span class="intro-title">${esc(info.title)}</span>`;
@@ -448,8 +501,8 @@ export class App {
     $('#p-sub').innerHTML = esc(info.text);
     $('#p-extra').innerHTML = '<span class="press">press any key to start</span>';
     this.viewer.setHighlight([]);
-    this.viewer.setPose('main', r === 3 ? 'plantar' : 'dorsal', { duration: 1300 });
-    if (r === 3) this.toast('No hints now. The foot turns over to show the sole.');
+    this.viewer.setPose('main', region.poses[`r${r}`], { duration: 1300 });
+    if (r === 3) this.toast(region.turnNote);
     this.announce(`${info.title}. ${info.text}`);
     clearTimeout(this.timers.intro);
     this.timers.intro = setTimeout(() => { if (this.session === s && s.phase === 'intro') this.advance(); }, 3200);
@@ -489,7 +542,7 @@ export class App {
     el.classList.toggle('win', correct);
     el.innerHTML = `<span class="ans">${esc(item[s.lang])}</span>`;
     this.fitWord();
-    $('#p-sub').innerHTML = `<span class="alt">${esc(altName(item, s.lang))}</span> · ${esc(item.describe)}`;
+    $('#p-sub').innerHTML = `<span class="alt">${esc(altName(item, s.lang))}</span> — ${esc(item.describe)}`;
     $('#p-extra').innerHTML = `
       <div class="row">
         <p class="msg">${correct ? 'Got it from memory.' : 'Not this time. Now you know it.'}</p>
@@ -528,7 +581,7 @@ export class App {
 
   finish() {
     const s = this.session;
-    const { level, mode } = this.run;
+    const { level, mode, region } = this.run;
     const sum = s.summary();
     const now = Date.now();
     clearInterval(this.timers.clock);
@@ -538,8 +591,7 @@ export class App {
       this.state.daily[this.run.day] = { key: s.items[0].key, correct };
       this.save();
       this.endSession();
-      this.showHome();
-      this.toast(correct ? 'Bone of the day: done. See you tomorrow.' : 'Bone of the day: logged. Tomorrow brings a new one.');
+      this.showHome().then(() => this.toast(correct ? 'Today’s structure: done. See you tomorrow.' : 'Today’s structure: logged. Tomorrow brings a new one.'));
       return;
     }
 
@@ -572,31 +624,36 @@ export class App {
     };
     this.save();
     this.sound.complete();
-    const ctx = { level, mode, sum, before, reviewed, L, now };
+    const ctx = { level, mode, region, sum, before, reviewed, L, now };
     this.endSession();
     this.showResults(ctx);
   }
 
-  showResults({ level, mode, sum, before, reviewed, L, now }) {
+  showResults({ level, mode, region, sum, before, reviewed, L, now }) {
     this.show('results');
     const speed = mode === 'speed';
     const items = sum.perItem;
     const headline = speed
       ? `${fmtTime(sum.totalMs)} for all ${items.length} names.`
-      : sum.recall >= 0.7 ? level.headline : 'A solid first pass. The shaky ones come back in your review.';
-    const kicker = speed ? 'level 4 · speed run' : `${mode === 'review' || reviewed ? 'review · ' : mode === 'practice' ? 'practice · ' : ''}level ${level.n} · ${level.title.toLowerCase()}`;
+      : sum.recall >= 0.7 ? `${level.headline}.` : 'A solid first pass. The shaky ones come back in your review.';
+    const tag = mode === 'review' || reviewed ? 'Review' : mode === 'practice' ? 'Practice' : speed ? 'Speed run' : `Level ${level.n}`;
+    const kicker = `Plate ${region.plate} · ${region.title} · ${tag}${speed ? '' : ` · ${level.title}`}`;
     const stats = speed
-      ? [['time', fmtTime(sum.totalMs), 'big'], ['first-try recall', pct(sum.recall)], ['wpm · accuracy', `${sum.wpm} · ${pct(sum.accuracy)}`]]
-      : [['first-try recall', pct(sum.recall), 'big'], ['next review', L.nextReviewAt ? describeDue(L.nextReviewAt, now) : '—'], ['wpm · accuracy', `${sum.wpm} · ${pct(sum.accuracy)}`]];
-    const starText = STAR_TEXT[speed ? 'speed' : 'lesson'];
+      ? [['Time', fmtTime(sum.totalMs), 'big'], ['First-try recall', pct(sum.recall)], ['Speed · accuracy', `${sum.wpm} wpm · ${pct(sum.accuracy)}`]]
+      : [['First-try recall', pct(sum.recall), 'big'], ['Next review', L.nextReviewAt ? describeDue(L.nextReviewAt, now) : '—'], ['Speed · accuracy', `${sum.wpm} wpm · ${pct(sum.accuracy)}`]];
+    const starText = speed
+      ? ['Finish the run', 'No misses', `Under ${fmtTime(level.parTimeMs)}`]
+      : ['Finish the level', 'Get through round 3 without a miss', 'Recall them on another day'];
     const starHint = (i) => {
       if (speed || i !== 2 || L.stars[2]) return '';
       return L.nextReviewAt ? ` <span class="dim">(review ${describeDue(L.nextReviewAt, now)})</span>` : '';
     };
     const lang = this.state.settings.lang;
 
-    const next = !speed && LEVELS[LEVELS.indexOf(level) + 1];
-    this.resultsPrimary = next ? { level: next.id, mode: next.speed ? 'speed' : 'lesson', label: `Next · Level ${next.n} · ${next.title}` } : { level: level.id, mode: speed ? 'speed' : 'lesson', label: speed ? 'Run it again' : 'Play again' };
+    const next = !speed && region.levels[region.levels.indexOf(level) + 1];
+    this.resultsPrimary = next
+      ? { level: next.id, mode: next.speed ? 'speed' : 'lesson', label: next.speed ? `Next · Speed run` : `Next · ${next.title}` }
+      : { level: level.id, mode: speed ? 'speed' : 'lesson', label: speed ? 'Run it again' : 'Play again' };
 
     $('#screen-results').innerHTML = `
       <div class="res">
@@ -606,48 +663,46 @@ export class App {
           ${stats.map(([k, v, cls]) => `<div class="stat ${cls || ''}"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('')}
         </div>
         <ul class="goals">
-          ${starText.map((t, i) => `<li class="${L.stars[i] ? 'on' : ''} ${L.stars[i] && !before[i] ? 'new' : ''}"><span class="star" aria-hidden="true">★</span><span>${esc(t)}${starHint(i)}</span>${L.stars[i] && !before[i] ? '<span class="badge">new</span>' : ''}</li>`).join('')}
+          ${starText.map((t, i) => `<li class="${L.stars[i] ? 'on' : ''} ${L.stars[i] && !before[i] ? 'new' : ''}"><span class="star" aria-hidden="true">${L.stars[i] ? '★' : '☆'}</span><span>${esc(t)}${starHint(i)}</span>${L.stars[i] && !before[i] ? '<span class="badge">new</span>' : ''}</li>`).join('')}
         </ul>
 
         <h2>What you named</h2>
-        <div class="cards">
+        <div class="named">
           ${items.map((p) => `
-            <article class="card">
-              <h3>${esc(p.item[lang])}</h3>
-              <p class="card-alt">${esc(altName(p.item, lang))}</p>
-              <p class="card-line">${esc(p.item.card)}</p>
+            <div class="named-row">
+              <div class="nm"><b>${esc(p.item[lang])}</b><span>${esc(altName(p.item, lang))}</span></div>
+              <p class="nd">${esc(p.item.card)}</p>
               <p class="status ${p.status.tone}">${esc(p.status.text)}</p>
-            </article>`).join('')}
+            </div>`).join('')}
         </div>
 
         ${level.examAngle?.length ? `
         <h2>Exam angle</h2>
-        <div class="notes">
-          ${level.examAngle.map((n) => `<p><b>${esc(n.term)}.</b> ${esc(n.text)}</p>`).join('')}
-        </div>` : ''}
+        <ol class="notes">
+          ${level.examAngle.map((n) => `<li><b>${esc(n.term)}.</b> ${esc(n.text)}</li>`).join('')}
+        </ol>` : ''}
 
-        <h2>Foot &amp; ankle · levels</h2>
-        <div class="levels">${this.levelsHTML(level.id)}</div>
+        <h2>${esc(region.title)} · levels</h2>
+        <div class="rows">${this.levelsHTML(region, level.id)}</div>
 
         <div class="actions">
           <button class="btn primary" data-action="primary">${esc(this.resultsPrimary.label)} <kbd>⏎</kbd></button>
           ${!speed ? `<button class="btn" data-action="play" data-level="${level.id}" data-mode="practice">Practice rounds 2–3</button>` : ''}
           ${!speed ? `<button class="btn" data-action="play" data-level="${level.id}" data-mode="lesson">Restart the level</button>` : ''}
-          <button class="btn" data-action="daily">Bone of the day #${this.dailyNumber()}</button>
           <button class="btn" data-action="map">Body map</button>
-          <button class="btn ghost" data-action="home">Home</button>
+          <button class="btn ghost" data-action="home">Index</button>
         </div>
         <p class="saved">${this.storageOk === false ? 'This browser window can’t store progress, so it resets when the page closes.' : 'Progress is saved in this browser.'}</p>
       </div>`;
     $('#screen-results').focus({ preventScroll: true });
   }
 
-  levelsHTML(currentId = null) {
+  levelsHTML(region, currentId = null) {
     const now = Date.now();
-    return LEVELS.map((lv) => {
+    return region.levels.map((lv) => {
       const L = this.state.levels[lv.id];
       const stars = L?.stars || [false, false, false];
-      let status = 'new';
+      let status = 'not started';
       if (L) {
         if (lv.speed) status = L.best?.timeMs != null && Number.isFinite(L.best.timeMs) ? `best ${fmtTime(L.best.timeMs)}` : 'played';
         else if (L.nextReviewAt) status = isDue(L.nextReviewAt, now) ? 'review due' : `review ${describeDue(L.nextReviewAt, now)}`;
@@ -655,46 +710,68 @@ export class App {
       }
       return `
         <button class="lvl ${lv.id === currentId ? 'current' : ''} ${status === 'review due' ? 'due' : ''}" data-action="level" data-level="${lv.id}">
-          <span class="lvl-n">level ${lv.n}</span>
-          <span class="lvl-title">${esc(lv.title)}</span>
-          <span class="lvl-blurb">${esc(lv.blurb)}</span>
-          <span class="lvl-meta">${lv.items.length} ${esc(lv.unit)} · <span class="mini-stars" aria-label="${stars.filter(Boolean).length} of 3 stars">${stars.map((on) => `<i class="${on ? 'on' : ''}">★</i>`).join('')}</span> · ${esc(status)}</span>
+          <span class="lvl-n">${lv.n}</span>
+          <span class="lvl-main"><span class="lvl-title">${esc(lv.title)}</span><span class="lvl-blurb">${esc(lv.blurb)}</span></span>
+          <span class="lvl-count">${lv.items.length} ${esc(lv.unit)}</span>
+          <span class="lvl-stars" aria-label="${stars.filter(Boolean).length} of 3 stars">${stars.map((on) => (on ? '★' : '☆')).join('')}</span>
+          <span class="lvl-status">${esc(status)}</span>
+        </button>`;
+    }).join('');
+  }
+
+  regionTabsHTML() {
+    const current = this.region.id;
+    return REGIONS.map((r) => {
+      const got = r.levels.reduce((n, lv) => n + (this.state.levels[lv.id]?.stars || []).filter(Boolean).length, 0);
+      return `
+        <button class="plate ${r.id === current ? 'on' : ''}" data-action="region" data-region="${r.id}" aria-pressed="${r.id === current}">
+          <span class="plate-n">Plate ${r.plate}</span>
+          <span class="plate-t">${esc(r.title)}</span>
+          <span class="plate-c">${esc(r.tally)} · ${got}/${r.levels.length * 3} ★</span>
         </button>`;
     }).join('');
   }
 
   // ---------------------------------------------------------------- home
 
-  showHome() {
+  async showHome() {
+    const nav = ++this.nav;
     this.endSession();
     this.show('home');
+    const region = this.region;
     const t = this.primaryTarget();
     const today = this.state.daily[dayKey(Date.now())];
     $('#home-primary').innerHTML = `${esc(t.label)} <kbd>⏎</kbd>`;
-    $('#home-levels').innerHTML = this.levelsHTML();
-    $('#home-daily').textContent = `Bone of the day #${this.dailyNumber()}${today ? (today.correct ? ' ✓' : ' · done') : ''}`;
+    $('#home-regions').innerHTML = this.regionTabsHTML();
+    $('#home-levels').innerHTML = this.levelsHTML(region);
+    $('#home-levels-title').textContent = `Plate ${region.plate} · ${region.title}`;
+    $('#home-cap').textContent = `Plate ${region.plate}. ${region.title}, ${region.tally}.`;
+    $('#home-daily').textContent = `Today’s structure${today ? (today.correct ? ' ✓' : ' · done') : ''}`;
     const due = LEVELS.filter((lv) => !lv.speed && isDue(this.state.levels[lv.id]?.nextReviewAt, Date.now()));
-    $('#home-due').innerHTML = due.length ? `<span class="dot"></span> ${due.length === 1 ? 'A review is' : `${due.length} reviews are`} due today` : '';
+    $('#home-due').textContent = due.length ? `${due.length === 1 ? 'One review is' : `${due.length} reviews are`} due today.` : '';
+    if (!(await this.ensureRegion(region.id)) || nav !== this.nav || this.screen !== 'home') return;
     this.viewer.setHighlight([]);
-    this.viewer.setView('hero', $('#home-stage'), { pose: 'hero', sway: false, spin: 0.18 });
+    this.viewer.setView('hero', $('#home-stage'), { pose: region.poses.home, sway: false, spin: 0.16 });
   }
 
   // ---------------------------------------------------------------- body map
 
-  showMap() {
+  async showMap() {
+    const nav = ++this.nav;
     this.endSession();
     this.show('map');
     this.mapSelected = null;
+    const region = this.region;
     const lang = this.state.settings.lang;
-    $('#map-list').innerHTML = BODY_MAP_GROUPS.map((g) => `
+    $('#map-regions').innerHTML = REGIONS.map((r) => `<button class="${r.id === region.id ? 'on' : ''}" data-action="region" data-region="${r.id}">${esc(r.title)}</button>`).join('');
+    $('#map-views').innerHTML = region.mapViews.map(([label, pose]) => `<button data-action="map-pose" data-pose="${pose}">${esc(label)}</button>`).join('');
+    $('#map-list').innerHTML = region.mapGroups.map((g) => `
       <div class="map-group">
         <h3>${esc(g.title)}</h3>
         <div class="chips">${g.keys.map((k) => `<button class="chip" data-action="map-bone" data-key="${k}">${esc(this.meshName(k, lang))}</button>`).join('')}</div>
       </div>`).join('');
-    $('#map-info').innerHTML = '<p class="quiet">Drag to turn the foot. Hover or tap any bone to name it.</p>';
+    $('#map-info').innerHTML = `<p class="quiet">Drag to turn the model. Hover or tap any ${esc(region.noun)} to name it.</p>`;
     const stage = $('#map-stage');
-    this.viewer.setHighlight([]);
-    this.viewer.setView('map', stage, { pose: 'dorsolateral', sway: false, orbit: true });
     if (!stage.dataset.bound) {
       stage.dataset.bound = '1';
       stage.addEventListener('pointermove', (e) => {
@@ -721,6 +798,9 @@ export class App {
         if (key) this.selectMapBone(key);
       });
     }
+    if (!(await this.ensureRegion(region.id)) || nav !== this.nav || this.screen !== 'map') return;
+    this.viewer.setHighlight([]);
+    this.viewer.setView('map', stage, { pose: region.poses.map, sway: false, orbit: true });
   }
 
   meshName(key, lang) {
@@ -756,7 +836,7 @@ export class App {
       return;
     }
     if (this.screen === 'lesson') {
-      // A control the learner tabbed to (a toggle, Continue, Home) keeps its own Enter/Space.
+      // A control the learner tabbed to (a toggle, Continue, the index) keeps its own Enter/Space.
       if ((k === 'Enter' || k === ' ') && e.target !== $('#sink') && e.target.closest?.('button, a, [role="button"]')) return;
       if (k === 'Enter' || k === 'Backspace' || k.length === 1) {
         e.preventDefault();
