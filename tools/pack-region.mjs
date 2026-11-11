@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REGIONS } from './regions.mjs';
+import { encodeMesh, ENCODING, QMAX } from './pack-encode.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const region = process.argv[2];
@@ -99,15 +100,16 @@ const bones = meshes.map((m) => {
   for (const p of verts) for (let a = 0; a < 3; a++) { min[a] = Math.min(min[a], p[a]); max[a] = Math.max(max[a], p[a]); sum[a] += p[a]; }
   const q = new Uint16Array(verts.length * 3);
   verts.forEach((p, i) => { for (let a = 0; a < 3; a++) q[i * 3 + a] = Math.round(((p[a] - min[a]) / (max[a] - min[a] || 1)) * 65535); });
-  const ind = Uint16Array.from(m.idx);
-  const vOffset = offset; push(new Uint8Array(q.buffer));
+  const enc = encodeMesh(q, Uint16Array.from(m.idx));
+  const ind = enc.idx;
+  const vOffset = offset; push(new Uint8Array(enc.pos.buffer));
   const iOffset = offset; push(new Uint8Array(ind.buffer));
   console.log(`  ${m.key.padEnd(12)} ${String(m.src).padStart(7)} -> ${String(ind.length / 3).padStart(5)} tris`);
-  return { key: m.key, fma: m.fma, vCount: verts.length, iCount: ind.length, vOffset, iOffset, min: min.map(r4), max: max.map(r4), centroid: sum.map((s) => r4(s / verts.length)) };
+  return { key: m.key, fma: m.fma, vCount: enc.vCount, iCount: ind.length, vOffset, iOffset, min: min.map(r4), max: max.map(r4), centroid: sum.map((s) => r4(s / verts.length)) };
 });
 
 const header = {
-  version: 1, region, units: 'cm',
+  version: 2, enc: ENCODING, qmax: QMAX, region, units: 'cm',
   frame: '+X body left, +Y up, +Z anterior; centred on the bounding box',
   source: 'BodyParts3D (c) 2008 Life Science Integrated Database Center, CC BY-SA 2.1 JP (simplified)',
   center: [0, 0, 0], radius: r4(radius), floorY: r4(bmin[1] - c[1]), context: [],

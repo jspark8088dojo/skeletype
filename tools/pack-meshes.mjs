@@ -16,6 +16,7 @@
 //   z' = -(y - cy) / 10  (+Z = anterior, toward the toes)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { encodeMesh, ENCODING, QMAX } from './pack-encode.mjs';
 
 const MESHES = [
   ['tibia', 'FMA24477'], ['fibula', 'FMA24480'],
@@ -114,20 +115,22 @@ for (const m of raw) {
       q[i * 3 + a] = Math.round(((p[a] - min[a]) / span) * 65535);
     }
   });
-  const ind = Uint16Array.from(idx);
+  const enc = encodeMesh(q, Uint16Array.from(idx));
+  const ind = enc.idx;
 
-  const vOffset = offset; pushBlock(new Uint8Array(q.buffer));
+  const vOffset = offset; pushBlock(new Uint8Array(enc.pos.buffer));
   const iOffset = offset; pushBlock(new Uint8Array(ind.buffer));
   const r = (x) => +x.toFixed(4);
   bones.push({
-    key: m.key, fma: m.fma, vCount: used.length, iCount: ind.length, vOffset, iOffset,
+    key: m.key, fma: m.fma, vCount: enc.vCount, iCount: ind.length, vOffset, iOffset,
     min: min.map(r), max: max.map(r), centroid: sum.map((s) => r(s / used.length)),
   });
   totalTris += ind.length / 3; totalVerts += used.length;
 }
 
 const header = {
-  version: 1,
+  version: 2,
+  enc: ENCODING, qmax: QMAX,
   units: 'cm',
   frame: 'right foot; +X medial, +Y up, +Z anterior; sole at y=0',
   source: 'BodyParts3D (c) 2008 Life Science Integrated Database Center, CC BY-SA 2.1 JP',

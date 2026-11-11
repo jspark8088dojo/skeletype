@@ -97,7 +97,7 @@ export class App {
       this.toast('Type the name of the bone shown in red. Esc opens the index.', 6500);
     } else {
       await this.showHome();
-    }
+    }    this.prefetchRegions();
   }
 
   save() {
@@ -110,16 +110,40 @@ export class App {
     if (this.viewer.packId === id) return true;
     if (!this.webgl) { this.viewer.setPack({ header: { region: id } }); return true; }
     if (!this.packs.has(id)) this.packs.set(id, loadPack(id));
+    // Say so while the models download (the figure would otherwise just be blank).
+    const token = (this._loading = {});
+    document.body.dataset.loading = regionById(id).title;
     try {
       const pack = await this.packs.get(id);
+      if (this._loading !== token) return false; // a newer request took over
       this.viewer.setPack(pack, regionById(id).ink);
       return true;
     } catch (err) {
       console.error(err);
       this.packs.delete(id);
-      this.toast('The 3D models didn’t load. Check your connection and try again.', 6000);
+      if (this._loading === token) this.toast('The 3D models didn’t load. Check your connection and try again.', 6000);
       return false;
+    } finally {
+      if (this._loading === token) { this._loading = null; delete document.body.dataset.loading; }
     }
+  }
+
+  /** Once things are quiet, fetch the other regions' models so switching plates is instant. */
+  prefetchRegions() {
+    if (!this.webgl || this._prefetched) return;
+    this._prefetched = true;
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    const rest = REGIONS.map((r) => r.id).filter((id) => !this.packs.has(id));
+    const next = () => {
+      const id = rest.shift();
+      if (!id) return;
+      if (!this.packs.has(id)) {
+        const p = loadPack(id);
+        this.packs.set(id, p);
+        p.then(() => idle(next), () => this.packs.delete(id));
+      } else idle(next);
+    };
+    idle(next);
   }
 
   setRegion(id) {

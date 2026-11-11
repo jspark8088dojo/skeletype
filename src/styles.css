@@ -251,6 +251,13 @@ kbd { font: 500 0.72em/1 var(--sans); padding: 0.2em 0.4em; border: 1px solid cu
 .chip.on { color: var(--red); text-decoration: underline; text-underline-offset: 3px; }
 .map-list { display: grid; gap: 14px; }
 
+/* While a region's models download, the empty figure says so. */
+body[data-loading] .home-stage, body[data-loading] .stage, body[data-loading] .map-stage { display: grid; place-items: center; }
+body[data-loading] .home-stage::after, body[data-loading] .stage::after, body[data-loading] .map-stage::after {
+  content: "Drawing the figure…"; font: italic 17px/1.3 var(--serif); color: var(--ink-3); animation: breathe 1.4s ease-in-out infinite;
+}
+@keyframes breathe { 50% { opacity: 0.35; } }
+
 /* ---------------------------------------------------------------- toasts, boot */
 
 .toasts { position: fixed; top: calc(var(--topbar) + 10px); left: 28px; z-index: 30; display: grid; gap: 8px; pointer-events: none; }

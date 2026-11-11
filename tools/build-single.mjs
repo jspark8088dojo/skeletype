@@ -37,6 +37,7 @@ const packs = readdirSync(join(root, 'assets')).filter((f) => f.endsWith('.pack'
 let html = read('index.html');
 
 const swaps = [
+  [/[ \t]*<!-- preload:start[\s\S]*?<!-- preload:end -->\n/, ''],
   [/<link rel="stylesheet" href="src\/styles\.css">/, `<style>\n${css}\n</style>`],
   [/<script type="importmap">[\s\S]*?<\/script>/, `<script type="importmap">${JSON.stringify({ imports })}</script>`],
   [/<script type="module" src="src\/main\.js"><\/script>/, `<script type="module">import 'skeletype/main.js';</script>`],

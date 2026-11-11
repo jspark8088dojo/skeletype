@@ -11,6 +11,9 @@ import * as THREE from 'three';
 
 const FOV = 30;
 const FIT_MARGIN = 1.2;
+const MAX_PIXELS = 3_300_000;
+const FRAME_MS = 1000 / 60; // never draw faster than this, even on 120 Hz screens
+const IDLE_FRAME_MS = 1000 / 30; // nothing but the gentle sway and pulse is moving
 
 const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
@@ -66,6 +69,12 @@ export async function loadPack(id) {
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return parsePack(u8.buffer);
   }
+  const early = window.__earlyPack;
+  if (early && early.id === id) {
+    window.__earlyPack = null;
+    const buf = await early.data;
+    if (buf) return parsePack(buf);
+  }
   const res = await fetch(`assets/${id}.pack`);
   if (!res.ok) throw new Error(`could not load the ${id} models (${res.status})`);
   return parsePack(await res.arrayBuffer());
@@ -78,13 +87,27 @@ export function parsePack(buf) {
   const hlen = dv.getUint32(4, true);
   const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, hlen)));
   const base = 8 + hlen;
+  const delta = header.enc === 'delta3'; // see tools/pack-encode.mjs
+  const qmax = delta ? header.qmax : 65535;
+  const unzig = (z) => (z >>> 1) ^ -(z & 1);
   const meshes = header.bones.map((b) => {
     const q = new Uint16Array(buf, base + b.vOffset, b.vCount * 3);
     const positions = new Float32Array(b.vCount * 3);
+    const acc = [0, 0, 0];
     for (let i = 0; i < b.vCount; i++) {
-      for (let a = 0; a < 3; a++) positions[i * 3 + a] = b.min[a] + (q[i * 3 + a] / 65535) * (b.max[a] - b.min[a]);
+      for (let a = 0; a < 3; a++) {
+        const v = delta ? (acc[a] += unzig(q[i * 3 + a])) : q[i * 3 + a];
+        positions[i * 3 + a] = b.min[a] + (v / qmax) * (b.max[a] - b.min[a]);
+      }
     }
-    return { ...b, positions, indices: new Uint16Array(buf, base + b.iOffset, b.iCount) };
+    let indices = new Uint16Array(buf, base + b.iOffset, b.iCount);
+    if (delta) {
+      const out = new Uint16Array(b.iCount);
+      let next = 0; // 0 = the next new vertex; otherwise the distance back from the newest one
+      for (let i = 0; i < b.iCount; i++) out[i] = indices[i] === 0 ? next++ : next - indices[i];
+      indices = out;
+    }
+    return { ...b, positions, indices };
   });
   return { header, meshes };
 }
@@ -204,8 +227,13 @@ export class Viewer {
       ink: '#3b342c', target: '#cf3a2b', targetEdge: '#6e1710', hover: '#c58a1f', hoverEdge: '#6b4708',
       secondary: '#2f6690', secondaryEdge: '#17364f', ...palette,
     };
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, premultipliedAlpha: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // On high-density screens the pixels are small enough that multisampling only costs time.
+    const antialias = (window.devicePixelRatio || 1) < 1.75;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias, alpha: true, premultipliedAlpha: true, powerPreference: 'high-performance' });
+    this.quality = 1; // lowered automatically if frames come in slowly (see _watchSpeed)
+    this.renderer.setPixelRatio(this._pixelRatio());
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.quality = Math.max(0.5, this.quality * 0.7); });
+    canvas.addEventListener('webglcontextrestored', () => { this.resize(); this._applyMaterials(); });
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.autoClear = false;
     this.scene = new THREE.Scene();
@@ -257,7 +285,16 @@ export class Viewer {
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
     this.resize();
-    this._loop = (t) => { this.frame(t); this.raf = requestAnimationFrame(this._loop); };
+    this._loop = (t) => {
+      this.raf = requestAnimationFrame(this._loop);
+      if (this._rafT != null) this._watchSpeed(t - this._rafT);
+      this._rafT = t;
+      // Camera moves, spins and drags get 60 frames a second; the idle sway gets 30.
+      const want = this._busy(t) ? FRAME_MS : IDLE_FRAME_MS;
+      if (this._drawnT != null && t - this._drawnT < want - 2) return;
+      this._drawnT = t;
+      this.frame(t);
+    };
     this.raf = requestAnimationFrame(this._loop);
   }
 
@@ -320,10 +357,33 @@ export class Viewer {
     this._buildGlows();
   }
 
+  /**
+   * Canvas pixels per CSS pixel: the screen's density (at most 2), scaled by `quality`, and capped so the
+   * full-window canvas never exceeds MAX_PIXELS (a 4K or 5K window would otherwise be very costly to fill).
+   */
+  _pixelRatio() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cap = Math.sqrt(MAX_PIXELS / Math.max(1, window.innerWidth * window.innerHeight));
+    return Math.max(0.6, Math.min(dpr, cap) * this.quality);
+  }
+
   resize() {
-    // Page zoom and moving to another display change devicePixelRatio; keep the canvas crisp.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Page zoom and moving to another display change devicePixelRatio; keep the canvas matched.
+    this.renderer.setPixelRatio(this._pixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight, true);
+  }
+
+  /** If the browser can't keep up (frames arriving slower than ~30 a second), render fewer pixels. */
+  _watchSpeed(gap) {
+    if (gap > 250) return; // tab was in the background or the page was busy loading
+    this._slow = (this._slow ?? 16) * 0.92 + gap * 0.08;
+    this._seen = (this._seen || 0) + 1;
+    if (this._seen > 45 && this._slow > 30 && this.quality > 0.5) {
+      this.quality = Math.max(0.5, this.quality * 0.75);
+      this._seen = 0;
+      this._slow = 16;
+      this.resize();
+    }
   }
 
   // ----- views -----
@@ -539,10 +599,16 @@ export class Viewer {
 
   // ----- frame -----
 
+  _busy(now) {
+    if (now - this.t0 < 800) return true; // fading a model in
+    for (const v of this.views.values()) if (v.anim || v.spinRate || v.el.classList.contains('dragging')) return true;
+    return false;
+  }
+
   frame(now) {
     const r = this.renderer;
     const W = window.innerWidth, H = window.innerHeight;
-    if (r.getPixelRatio() !== Math.min(window.devicePixelRatio || 1, 2)) this.resize(); // moved to another display
+    if (Math.abs(r.getPixelRatio() - this._pixelRatio()) > 0.01) this.resize(); // moved to another display
     const dt = Math.min(0.05, (now - (this.lastT ?? now)) / 1000);
     this.lastT = now;
     // Fade the model in over 0.6 s of wall-clock time (frame-count based fades crawl in throttled tabs).
