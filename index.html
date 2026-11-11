@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en" data-font="sans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>skeletype · bones of the foot</title>
+  <meta name="description" content="Learn the bones of the foot by typing their names on a 3D model: copy, first letter, then from memory, with spaced reviews.">
+  <meta name="theme-color" content="#0a0d14">
+  <link rel="stylesheet" href="src/styles.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.min.js" } }
+  </script>
+  <script type="module" src="src/main.js"></script>
+</head>
+<body data-screen="boot">
+  <canvas id="gl" aria-hidden="true"></canvas>
+
+  <div id="app">
+    <header class="topbar">
+      <button class="brand" data-action="home" title="Home (Esc)">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="29" height="29" rx="9" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+          <path d="M10.2 9.4a2.6 2.6 0 1 1 3.4 3.4l5.6 5.6a2.6 2.6 0 1 1 3.4 3.4 2.6 2.6 0 1 1-3.4 3.4 2.6 2.6 0 0 1 0-3.4l-5.6-5.6a2.6 2.6 0 0 1-3.4 0 2.6 2.6 0 1 1 0-3.4z" fill="currentColor"/>
+        </svg>
+        <span class="word-mark">skeletype</span>
+      </button>
+      <span class="region">foot &amp; ankle</span>
+      <nav class="toggles" aria-label="Settings">
+        <button id="t-font" class="toggle font-toggle" data-action="font">Aa</button>
+        <button id="t-lang" class="toggle" data-action="lang">EN</button>
+        <button id="t-sound" class="toggle" data-action="sound" aria-pressed="true">sound on</button>
+      </nav>
+    </header>
+
+    <main>
+      <!-- Lesson: 3D stage, prompt, keyboard -->
+      <section id="screen-lesson" class="screen lesson" hidden>
+        <div class="stage-wrap">
+          <div id="stage-main" class="stage" aria-hidden="true"></div>
+          <aside class="inset">
+            <div id="inset-view" class="inset-view" aria-hidden="true"></div>
+            <p id="inset-label" class="inset-label">right foot · lateral view</p>
+            <p class="credit">models: BodyParts3D · CC BY-SA 2.1 JP</p>
+          </aside>
+        </div>
+        <div id="prompt" class="prompt" data-state="prompt">
+          <p id="p-meta" class="meta"></p>
+          <div class="word-line"><span id="p-word" class="word"></span></div>
+          <p id="p-sub" class="sub"></p>
+          <div id="p-extra" class="extra"></div>
+        </div>
+        <div id="kbd"></div>
+        <input id="sink" class="sink" type="text" inputmode="none" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" tabindex="-1" aria-label="Type the bone name">
+      </section>
+
+      <!-- Results -->
+      <section id="screen-results" class="screen results" tabindex="-1" hidden></section>
+
+      <!-- Home -->
+      <section id="screen-home" class="screen home" hidden>
+        <div class="home-hero">
+          <div class="home-copy">
+            <p class="kicker">foot &amp; ankle · 26 bones</p>
+            <h1>Learn the bones of the foot by typing them.</h1>
+            <p class="lede">Copy each name, recall it from the first letter, then name it cold while the foot turns. Short reviews on later days make it stick.</p>
+            <div class="home-cta">
+              <button id="home-primary" class="btn primary" data-action="primary">Start <kbd>⏎</kbd></button>
+              <button id="home-daily" class="btn" data-action="daily">Bone of the day</button>
+              <button class="btn" data-action="map">Body map</button>
+            </div>
+            <p id="home-due" class="due"></p>
+          </div>
+          <div id="home-stage" class="home-stage" aria-hidden="true"></div>
+        </div>
+        <h2 class="home-h2">Levels</h2>
+        <div id="home-levels" class="levels"></div>
+        <p class="foot-credit">3D models: BodyParts3D, © 2008 Life Science Integrated Database Center, licensed CC BY-SA 2.1 Japan. Rendering: three.js (MIT).</p>
+      </section>
+
+      <!-- Body map -->
+      <section id="screen-map" class="screen map" hidden>
+        <div id="map-stage" class="map-stage">
+          <div id="map-tip" class="map-tip" hidden></div>
+        </div>
+        <aside class="map-panel">
+          <div class="map-head">
+            <h1>Body map</h1>
+            <div class="seg" role="group" aria-label="View">
+              <button data-action="map-pose" data-pose="dorsal">top</button>
+              <button data-action="map-pose" data-pose="plantar">sole</button>
+              <button data-action="map-pose" data-pose="lateral">outside</button>
+              <button data-action="map-pose" data-pose="medial">inside</button>
+            </div>
+          </div>
+          <div id="map-info" class="map-info" aria-live="polite"></div>
+          <div id="map-list" class="map-list"></div>
+          <button class="btn ghost" data-action="home">Back <kbd>esc</kbd></button>
+        </aside>
+      </section>
+    </main>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+    <div id="sr" class="sr-only" aria-live="polite"></div>
+    <div id="boot" class="boot"><span class="spinner"></span><span id="boot-text">Loading the bones…</span></div>
+  </div>
+
+  <noscript><p class="noscript">skeletype needs JavaScript to run.</p></noscript>
+</body>
+</html>
